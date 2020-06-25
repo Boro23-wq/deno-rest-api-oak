@@ -1,7 +1,7 @@
 const dbCredentials = {
-  user: "23Boro",
-  database: "deno-rest-api",
-  password: "yesyes",
+  user: "<dbusername>",
+  database: "<dbname>",
+  password: "<dbpassword>",
   hostname: "localhost",
   port: 5432,
 };

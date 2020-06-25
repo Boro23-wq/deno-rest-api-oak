@@ -1,67 +1,85 @@
+import { Client } from "https://deno.land/x/postgres/mod.ts";
 import { Product } from "../types.ts";
-import { v4 } from "https://deno.land/std/uuid/mod.ts";
+import { dbCredentials } from "../config.ts";
 
-let products: Product[] = [
-  {
-    id: "1",
-    name: "Airpods Pro",
-    description: "Airpods for your iPhone, with engraved.",
-    price: 249.00,
-  },
-  {
-    id: "2",
-    name: "Powerbeats Pro",
-    description: "Totally wireless earphones - Moss",
-    price: 249.95,
-  },
-  {
-    id: "3",
-    name: "Apple Magic Keyboard",
-    description: "Compact Magic Keyboard for iPad Pro",
-    price: 299.00,
-  },
-  {
-    id: "4",
-    name: "iPhone XS",
-    description: "Refurbished iPhone XS 256 GB - Space Grey",
-    price: 699.00,
-  },
-  {
-    id: "5",
-    name: "Macbook Pro 2020",
-    description: "Next gen Mackbook Pro 13 inch 32GB 4TB",
-    price: 1299.00,
-  },
-];
+//initialise client
+const client = new Client(dbCredentials);
 
 // @desc        Get all products
 // @route       GET /api/v1/products
-const getProducts = ({ response }: { response: any }) => {
-  response.body = {
-    success: true,
-    data: products,
-  };
+const getProducts = async ({ response }: { response: any }) => {
+  try {
+    await client.connect();
+    const result = await client.query("SELECT * FROM products");
+
+    const products = new Array();
+    result.rows.map((p) => {
+      let obj: any = new Object();
+
+      result.rowDescription.columns.map((el, i) => {
+        obj[el.name] = p[i];
+      });
+
+      products.push(obj);
+    });
+
+    response.body = {
+      success: true,
+      data: products,
+    };
+  } catch (err) {
+    response.status = 500;
+    response.body = {
+      success: false,
+      msg: err.toString(),
+    };
+  } finally {
+    await client.end();
+  }
 };
 
 // @desc        Get single product
 // @route       GET /api/v1/products/:id
-const getProduct = (
+const getProduct = async (
   { params, response }: { params: { id: string }; response: any },
 ) => {
   const product: Product | undefined = products.find((p) => p.id === params.id);
+  try {
+    await client.connect();
+    const result = await client.query(
+      "SELECT * FROM products WHERE id = $1",
+      params.id,
+    );
 
-  if (product) {
-    response.status = 200;
-    response.body = {
-      success: true,
-      data: product,
-    };
-  } else {
-    response.status = 400;
+    if (result.rows.toString() === "") {
+      response.status = 404;
+      response.body = {
+        success: false,
+        msg: `No product with the id of ${params.id}`,
+      };
+      return;
+    } else {
+      const product: any = new Object();
+
+      result.rows.map((p) => {
+        result.rowDescription.columns.map((el, i) => {
+          product[el.name] = p[i];
+        });
+      });
+
+      response.body = {
+        success: true,
+        data: product,
+      };
+    }
+  } catch (err) {
+    response.status = 500;
     response.body = {
       success: false,
-      msg: "Product Not Found!",
+      msg: err.toString(),
     };
+  } finally {
+    await client.end();
   }
 };
 
@@ -72,6 +90,7 @@ const addProduct = async (
 ) => {
   //body : {type: {json}, value}
   const body = await request.body();
+  const product = body.value;
 
   if (!request.hasBody) {
     response.status = 400;
@@ -80,62 +99,128 @@ const addProduct = async (
       msg: "No Data Found!",
     };
   } else {
-    const product: Product = body.value;
-    product.id = v4.generate();
-    products.push(product);
-    response.status = 201;
-    response.body = {
-      success: true,
-      data: product,
-    };
+    try {
+      await client.connect();
+      const result = await client.query(
+        "INSERT INTO products(name, description, price) VALUES($1,$2,$3)",
+        product.name,
+        product.description,
+        product.price,
+      );
+
+      response.status = 201;
+      response.boyd = {
+        success: true,
+        data: product,
+      };
+    } catch (err) {
+      response.status = 500;
+      response.body = {
+        success: false,
+        msg: err.toString(),
+      };
+    } finally {
+      await client.end();
+    }
   }
 };
 
-// @desc        Update a product
-// @route       PUT /api/v1/products/:id
+// @desc    Update product
+// @route   PUT /api/v1/products/:id
 const updateProduct = async (
-  { request, params, response }: {
+  { params, request, response }: {
     params: { id: string };
     request: any;
     response: any;
   },
 ) => {
-  const product: Product | undefined = products.find((p) => p.id === params.id);
+  await getProduct({ params: { "id": params.id }, response });
 
-  if (product) {
-    const body = await request.body();
-
-    const updatedData: { name?: string; description?: string; price?: number } =
-      body.value;
-
-    products = products.map((p) =>
-      p.id === params.id ? { ...p, ...updatedData } : p
-    );
-
-    response.status = 200;
-    response.body = {
-      success: true,
-      data: products,
-    };
-  } else {
-    response.status = 400;
+  if (response.status === 404) {
     response.body = {
       success: false,
-      msg: "Product couldn't be updated!",
+      msg: response.body.msg,
     };
+    response.status = 404;
+    return;
+  } else {
+    const body = await request.body();
+    const product = body.value;
+
+    if (!request.hasBody) {
+      response.status = 400;
+      response.body = {
+        success: false,
+        msg: "No data",
+      };
+    } else {
+      try {
+        await client.connect();
+
+        const result = await client.query(
+          "UPDATE products SET name=$1, description=$2, price=$3 WHERE id=$4",
+          product.name,
+          product.description,
+          product.price,
+          params.id,
+        );
+
+        response.status = 200;
+        response.body = {
+          success: true,
+          data: product,
+        };
+      } catch (err) {
+        response.status = 500;
+        response.body = {
+          success: false,
+          msg: err.toString(),
+        };
+      } finally {
+        await client.end();
+      }
+    }
   }
 };
 
 // @desc        Delete a product
 // @route       PUT /api/v1/products/:id
-const deleteProduct = (
+const deleteProduct = async (
   { params, response }: { params: { id: string }; response: any },
 ) => {
-  products = products.filter((p) => p.id !== params.id);
-  response.body = {
-    success: true,
-    msg: "Product Removed!",
-  };
+  await getProduct({ params: { "id": params.id }, response });
+
+  if (response.status === 404) {
+    response.body = {
+      success: false,
+      msg: response.body.msg,
+    };
+    response.status = 404;
+    return;
+  } else {
+    try {
+      await client.connect();
+
+      const result = await client.query(
+        "DELETE FROM products WHERE id=$1",
+        params.id,
+      );
+
+      response.body = {
+        success: true,
+        msg: `Produuct with id ${params.id} has been deleted`,
+      };
+      response.status = 204;
+    } catch (err) {
+      response.status = 500;
+      response.body = {
+        success: false,
+        msg: err.toString(),
+      };
+    } finally {
+      await client.end();
+    }
+  }
 };
 
 export { getProducts, getProduct, addProduct, updateProduct, deleteProduct };
